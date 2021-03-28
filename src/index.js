@@ -5,7 +5,7 @@ const IP_CIDR = require("ip-cidr");
 
 let options = {
   port: 80,
-  timeout: 3000,
+  timeout: 1000,
   downloadTime: 10000,
   pingCount: 3,
   pingConcurrency: 20,
@@ -43,12 +43,15 @@ async function ping(host) {
 async function filterTop() {
   // 筛选出3个ping最快的
   const v4 = (await getIPCidr()).ipv4_cidrs;
+  const top = [];
+  const topDelay = [];
+  let topMaxIndex = -1;
 
   let ip = [];
 
   const gotNewIP = () => {
     if (v4.length === 0) return;
-    const x = v4.splice(0, 1);
+    const x = v4.shift();
     const cidr = new IP_CIDR(x);
     ip = [...ip, ...cidr.toArray()];
   }
@@ -56,12 +59,12 @@ async function filterTop() {
   const doPing = async (i) => {
     let count = 0;
     let total = 0;
-    while (++count < options.pingCount) {
+    while (count++ < options.pingCount) {
       const t = time();
       const x = await ping(i);
       total += x ? time() - t : options.timeout;
     }
-    return total / count;
+    return total / options.pingCount;
   }
 
   // 开始检查
@@ -74,24 +77,38 @@ async function filterTop() {
     if (ip.length === 0) return;
     const i = ip.shift();
     const delay = await doPing(i);
+    const addCurrent = () => {
+      top.push(i);
+      topDelay.push(delay);
+      const max = Math.max(...topDelay);
+      const maxIndex = topDelay.findIndex(x => x === max);
+      topMaxIndex = maxIndex;
+    }
     // 检查是否更优
+    if (delay < options.timeout) {
+      if (topMaxIndex === -1 || top.length < 5) {
+        addCurrent();
+      } else {
+        const curMax = topDelay[topMaxIndex];
+        if (curMax > delay) {
+          // 当前IP延迟更低
+          top.splice(topMaxIndex, 1);
+          topDelay.splice(topMaxIndex, 1);
+          addCurrent();
+        }
+      }
+    }
     pingQueue--;
     while (pingQueue < options.pingConcurrency) {
       handleOne();
+      if (ip.length === 0) break;
     }
   }
 
-  // const v4 = (await getIPCidr()).ipv4_cidrs;
-  // console.log("got cidrs");
-  // let result = [];
-  // v4.forEach(x => {
-  //   const cidr = new IP_CIDR(x);
-  //   result = [...result, ...cidr.toArray()];
-  // });
-  // return result;
+  handleOne();
 }
 
 async function main() {
-  console.log(await getIPs());
+  console.log(await filterTop());
 }
 main();
